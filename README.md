@@ -23,6 +23,14 @@ npm run build
 npm run preview
 ```
 
+## GitHub Pages Build
+
+```bash
+npm run build:pages
+```
+
+This rebuilds the app with the correct repository base path and refreshes the tracked `docs/` folder that GitHub Pages publishes.
+
 ## Controls
 
 - `Space`: pause or resume
@@ -33,4 +41,8 @@ npm run preview
 
 ## Deployment
 
-GitHub Pages deployment is configured through [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml). The workflow computes the correct Vite `base` path automatically so the site works both as a user site and as a project site.
+The live site is published from the `docs/` folder on `main` at:
+
+- [https://sw0l1y.github.io/orbital-mechanics-sim/](https://sw0l1y.github.io/orbital-mechanics-sim/)
+
+After changing the simulator, run `npm run build:pages`, commit the updated `docs/` output, and push `main`.
