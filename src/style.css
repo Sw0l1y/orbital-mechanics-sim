@@ -233,10 +233,45 @@ button.primary:hover {
   gap: 8px;
 }
 
+.stats-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.soi-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(165, 220, 228, 0.1);
+}
+
+.soi-indicator .stat-label {
+  margin-bottom: 0;
+}
+
+.soi-indicator strong {
+  margin-left: auto;
+}
+
+.soi-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 8px currentColor;
+  transition: background 300ms ease;
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.stats-full {
+  grid-column: 1 / -1;
 }
 
 .stats-grid strong,
@@ -252,6 +287,11 @@ button.primary:hover {
   text-transform: uppercase;
   letter-spacing: 0.1em;
 }
+
+.pe-label { color: rgba(255, 145, 109, 0.7); }
+.pe-value { color: rgba(255, 145, 109, 0.95); }
+.ap-label { color: rgba(123, 224, 221, 0.7); }
+.ap-value { color: rgba(123, 224, 221, 0.95); }
 
 .shortcuts {
   margin-top: auto;

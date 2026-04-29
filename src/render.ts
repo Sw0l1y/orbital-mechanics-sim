@@ -1,4 +1,4 @@
-import type { Body, FocusId, Probe, Vec } from './sim.ts'
+import type { Body, BodyId, FocusId, PredictionResult, Probe, Vec } from './sim.ts'
 
 export interface CameraState {
   center: Vec
@@ -18,9 +18,12 @@ export interface RenderOptions {
   height: number
   showTrails: boolean
   showPrediction: boolean
-  prediction: Vec[]
+  prediction: PredictionResult
   burnVector: Vec
   highlightId: FocusId
+  soiRadii: Map<BodyId, number>
+  pePosition: Vec | null
+  apPosition: Vec | null
 }
 
 function mulberry32(seed: number): () => number {
@@ -131,32 +134,162 @@ function drawTrail(
   ctx.stroke()
 }
 
-function drawPrediction(
+function getSoiTrajectoryColor(bodyId: BodyId): string {
+  switch (bodyId) {
+    case 'star': return 'rgba(243, 179, 95, 0.85)'
+    case 'planet': return 'rgba(113, 211, 215, 0.85)'
+    case 'moon': return 'rgba(215, 219, 249, 0.85)'
+  }
+}
+
+function getSoiRingColor(bodyId: BodyId): { stroke: string; fill: string; label: string } {
+  switch (bodyId) {
+    case 'planet': return {
+      stroke: 'rgba(113, 211, 215, 0.28)',
+      fill: 'rgba(113, 211, 215, 0.04)',
+      label: 'rgba(113, 211, 215, 0.5)',
+    }
+    case 'moon': return {
+      stroke: 'rgba(215, 219, 249, 0.28)',
+      fill: 'rgba(215, 219, 249, 0.04)',
+      label: 'rgba(215, 219, 249, 0.5)',
+    }
+    default: return { stroke: '', fill: '', label: '' }
+  }
+}
+
+function drawSoiCircles(
   ctx: CanvasRenderingContext2D,
-  prediction: Vec[],
+  bodies: Body[],
+  soiRadii: Map<BodyId, number>,
   camera: CameraState,
   width: number,
   height: number,
   pixelsPerUnit: number,
 ): void {
-  if (prediction.length < 2) {
-    return
+  ctx.save()
+  ctx.setLineDash([5, 9])
+  ctx.lineWidth = 1.2
+
+  for (const body of bodies) {
+    const soiRadius = soiRadii.get(body.id)
+    if (!soiRadius) continue
+    const screenRadius = soiRadius * pixelsPerUnit
+    if (screenRadius < 8) continue
+
+    const center = worldToScreen(body.position, camera, width, height, pixelsPerUnit)
+    const colors = getSoiRingColor(body.id)
+
+    ctx.strokeStyle = colors.stroke
+    ctx.fillStyle = colors.fill
+    ctx.beginPath()
+    ctx.arc(center.x, center.y, screenRadius, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+
+    ctx.setLineDash([])
+    ctx.fillStyle = colors.label
+    ctx.font = '500 10px "IBM Plex Mono", monospace'
+    ctx.letterSpacing = '0.06em'
+    const labelAngle = -Math.PI / 4
+    const labelX = center.x + Math.cos(labelAngle) * screenRadius + 6
+    const labelY = center.y + Math.sin(labelAngle) * screenRadius - 4
+    ctx.fillText(`${body.name.toUpperCase()} SOI`, labelX, labelY)
+    ctx.setLineDash([5, 9])
   }
 
+  ctx.restore()
+}
+
+function drawSegmentedPrediction(
+  ctx: CanvasRenderingContext2D,
+  prediction: PredictionResult,
+  camera: CameraState,
+  width: number,
+  height: number,
+  pixelsPerUnit: number,
+): void {
+  const { points, soiBodyIds } = prediction
+  if (points.length < 2) return
+
   ctx.save()
-  ctx.beginPath()
-  for (let index = 0; index < prediction.length; index += 1) {
-    const point = worldToScreen(prediction[index], camera, width, height, pixelsPerUnit)
-    if (index === 0) {
-      ctx.moveTo(point.x, point.y)
-    } else {
-      ctx.lineTo(point.x, point.y)
+
+  const drawSegment = (start: number, end: number, bodyId: BodyId): void => {
+    if (end - start < 1) return
+    ctx.beginPath()
+    const first = worldToScreen(points[start], camera, width, height, pixelsPerUnit)
+    ctx.moveTo(first.x, first.y)
+    for (let i = start + 1; i <= end; i += 1) {
+      const pt = worldToScreen(points[i], camera, width, height, pixelsPerUnit)
+      ctx.lineTo(pt.x, pt.y)
+    }
+    ctx.setLineDash([7, 6])
+    ctx.lineWidth = 2
+    ctx.strokeStyle = getSoiTrajectoryColor(bodyId)
+    ctx.stroke()
+  }
+
+  let segmentStart = 0
+  for (let i = 1; i < points.length; i += 1) {
+    if (soiBodyIds[i] !== soiBodyIds[i - 1] || i === points.length - 1) {
+      drawSegment(segmentStart, i, soiBodyIds[segmentStart])
+      segmentStart = i
     }
   }
-  ctx.setLineDash([8, 7])
-  ctx.lineWidth = 2
-  ctx.strokeStyle = 'rgba(255, 242, 214, 0.72)'
+
+  // SOI transition diamonds
+  ctx.setLineDash([])
+  for (let i = 1; i < points.length; i += 1) {
+    if (soiBodyIds[i] === soiBodyIds[i - 1]) continue
+    const pt = worldToScreen(points[i], camera, width, height, pixelsPerUnit)
+    ctx.fillStyle = getSoiTrajectoryColor(soiBodyIds[i])
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(pt.x, pt.y - 7)
+    ctx.lineTo(pt.x + 5, pt.y)
+    ctx.lineTo(pt.x, pt.y + 7)
+    ctx.lineTo(pt.x - 5, pt.y)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  ctx.restore()
+}
+
+function drawOrbitalMarker(
+  ctx: CanvasRenderingContext2D,
+  position: Vec,
+  label: string,
+  isPe: boolean,
+  camera: CameraState,
+  width: number,
+  height: number,
+  pixelsPerUnit: number,
+): void {
+  const pt = worldToScreen(position, camera, width, height, pixelsPerUnit)
+  const color = isPe ? 'rgba(255, 145, 109, 0.95)' : 'rgba(123, 224, 221, 0.95)'
+  const dir = isPe ? 1 : -1
+
+  ctx.save()
+  ctx.translate(pt.x, pt.y)
+
+  ctx.fillStyle = color
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(0, dir * 6)
+  ctx.lineTo(-5, dir * -4)
+  ctx.lineTo(5, dir * -4)
+  ctx.closePath()
+  ctx.fill()
   ctx.stroke()
+
+  ctx.fillStyle = color
+  ctx.font = '600 11px "IBM Plex Mono", monospace'
+  ctx.fillText(label, 9, dir * 6)
+
   ctx.restore()
 }
 
@@ -294,7 +427,14 @@ export function renderScene(
   const pixelsPerUnit = (Math.min(options.width, options.height) / 760) * camera.zoom
 
   if (options.showPrediction) {
-    drawPrediction(ctx, options.prediction, camera, options.width, options.height, pixelsPerUnit)
+    drawSoiCircles(ctx, bodies, options.soiRadii, camera, options.width, options.height, pixelsPerUnit)
+    drawSegmentedPrediction(ctx, options.prediction, camera, options.width, options.height, pixelsPerUnit)
+    if (options.pePosition) {
+      drawOrbitalMarker(ctx, options.pePosition, 'Pe', true, camera, options.width, options.height, pixelsPerUnit)
+    }
+    if (options.apPosition) {
+      drawOrbitalMarker(ctx, options.apPosition, 'Ap', false, camera, options.width, options.height, pixelsPerUnit)
+    }
   }
 
   if (options.showTrails) {

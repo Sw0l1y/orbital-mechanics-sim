@@ -4,13 +4,16 @@ import {
   TIME_SCALE_OPTIONS,
   type BurnPlan,
   type FocusId,
+  type PredictionResult,
   computeOrbitalMetrics,
   computePrediction,
+  computeSoiRadii,
   createSimulation,
   describeImpact,
   executeBurn,
   getEntityLabel,
   getEntityPosition,
+  getDominantBody,
   getPlannedBurnVector,
   getPresetById,
   round,
@@ -105,38 +108,41 @@ app.innerHTML = `
         <label><input id="trails-toggle" type="checkbox" checked /> Show trails</label>
       </div>
 
-      <div class="card stats-grid">
-        <div>
-          <span class="stat-label">Dominant body</span>
-          <strong id="metric-body">Helios</strong>
+      <div class="card stats-card">
+        <div class="soi-indicator">
+          <span class="soi-dot" id="soi-dot"></span>
+          <span class="stat-label">Orbiting</span>
+          <strong id="metric-body">—</strong>
         </div>
-        <div>
-          <span class="stat-label">Altitude</span>
-          <strong id="metric-altitude">0</strong>
-        </div>
-        <div>
-          <span class="stat-label">Probe speed</span>
-          <strong id="metric-speed">0</strong>
-        </div>
-        <div>
-          <span class="stat-label">Relative speed</span>
-          <strong id="metric-relative-speed">0</strong>
-        </div>
-        <div>
-          <span class="stat-label">Periapsis</span>
-          <strong id="metric-periapsis">-</strong>
-        </div>
-        <div>
-          <span class="stat-label">Apoapsis</span>
-          <strong id="metric-apoapsis">-</strong>
-        </div>
-        <div>
-          <span class="stat-label">Eccentricity</span>
-          <strong id="metric-eccentricity">0</strong>
-        </div>
-        <div>
-          <span class="stat-label">Orbit class</span>
-          <strong id="metric-class">-</strong>
+        <div class="stats-grid">
+          <div>
+            <span class="stat-label">Altitude</span>
+            <strong id="metric-altitude">0</strong>
+          </div>
+          <div>
+            <span class="stat-label">Speed</span>
+            <strong id="metric-speed">0</strong>
+          </div>
+          <div>
+            <span class="stat-label pe-label">Periapsis</span>
+            <strong id="metric-periapsis" class="pe-value">—</strong>
+          </div>
+          <div>
+            <span class="stat-label ap-label">Apoapsis</span>
+            <strong id="metric-apoapsis" class="ap-value">—</strong>
+          </div>
+          <div>
+            <span class="stat-label">Eccentricity</span>
+            <strong id="metric-eccentricity">0</strong>
+          </div>
+          <div>
+            <span class="stat-label">Period</span>
+            <strong id="metric-period">—</strong>
+          </div>
+          <div class="stats-full">
+            <span class="stat-label">Orbit class</span>
+            <strong id="metric-class">—</strong>
+          </div>
         </div>
       </div>
 
@@ -189,12 +195,13 @@ const resetButton = requireElement<HTMLButtonElement>('#reset-btn')
 const predictionToggle = requireElement<HTMLInputElement>('#prediction-toggle')
 const trailsToggle = requireElement<HTMLInputElement>('#trails-toggle')
 const metricBody = requireElement<HTMLElement>('#metric-body')
+const soiDot = requireElement<HTMLElement>('#soi-dot')
 const metricAltitude = requireElement<HTMLElement>('#metric-altitude')
 const metricSpeed = requireElement<HTMLElement>('#metric-speed')
-const metricRelativeSpeed = requireElement<HTMLElement>('#metric-relative-speed')
 const metricPeriapsis = requireElement<HTMLElement>('#metric-periapsis')
 const metricApoapsis = requireElement<HTMLElement>('#metric-apoapsis')
 const metricEccentricity = requireElement<HTMLElement>('#metric-eccentricity')
+const metricPeriod = requireElement<HTMLElement>('#metric-period')
 const metricClass = requireElement<HTMLElement>('#metric-class')
 const statusLine = requireElement<HTMLElement>('#status-line')
 const focusLabel = requireElement<HTMLElement>('#focus-label')
@@ -218,7 +225,10 @@ let canvasWidth = 0
 let canvasHeight = 0
 let predictionNeedsRefresh = true
 let predictionTimer = 0
-let predictionPoints = computePrediction(simulation, true)
+let predictionPoints: PredictionResult = computePrediction(simulation, true)
+let soiRadii = computeSoiRadii(simulation.bodies)
+let pePosition: { x: number; y: number } | null = null
+let apPosition: { x: number; y: number } | null = null
 const camera: CameraState = {
   center: getEntityPosition(simulation, focusId),
   zoom: desiredZoom,
@@ -277,10 +287,13 @@ function setBurnControls(burnPlan: BurnPlan): void {
 function loadPreset(presetId: string): void {
   simulation = createSimulation(presetId)
   running = false
+  soiRadii = computeSoiRadii(simulation.bodies)
   applyPresetDetails()
   camera.center = getEntityPosition(simulation, focusId)
   camera.zoom = desiredZoom
   predictionPoints = computePrediction(simulation, true)
+  const metrics = computeOrbitalMetrics(simulation)
+  findOrbitMarkers(predictionPoints, metrics.energy < 0)
   predictionNeedsRefresh = false
   syncUi()
 }
@@ -301,17 +314,31 @@ function syncCanvasSize(): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 }
 
+const SOI_COLORS: Record<string, string> = {
+  star: '#f3b35f',
+  planet: '#71d3d7',
+  moon: '#d7dbf9',
+}
+
+function formatPeriod(seconds: number | null): string {
+  if (seconds === null) return '—'
+  if (seconds < 60) return `${round(seconds, 1)}s`
+  if (seconds < 3600) return `${round(seconds / 60, 1)}m`
+  return `${round(seconds / 3600, 2)}h`
+}
+
 function syncUi(): void {
   const metrics = computeOrbitalMetrics(simulation)
   const impactLabel = describeImpact(simulation)
 
   metricBody.textContent = metrics.dominantBodyName
+  soiDot.style.background = SOI_COLORS[metrics.dominantBodyId] ?? '#fff'
   metricAltitude.textContent = `${round(metrics.altitude, 1)} u`
   metricSpeed.textContent = formatSpeed(metrics.speed)
-  metricRelativeSpeed.textContent = formatSpeed(metrics.relativeSpeed)
   metricPeriapsis.textContent = formatDistance(metrics.periapsis)
   metricApoapsis.textContent = formatDistance(metrics.apoapsis)
   metricEccentricity.textContent = `${round(metrics.eccentricity, 3)}`
+  metricPeriod.textContent = formatPeriod(metrics.period)
   metricClass.textContent = metrics.orbitClass
 
   pauseButton.textContent = running ? 'Pause' : 'Run'
@@ -327,12 +354,45 @@ function syncUi(): void {
 }
 
 
+function findOrbitMarkers(result: PredictionResult, isBoundOrbit: boolean): void {
+  const { points, soiBodyIds } = result
+  if (points.length < 3) {
+    pePosition = null
+    apPosition = null
+    return
+  }
+
+  const dominantBody = getDominantBody(simulation)
+  const startSoi = soiBodyIds[0]
+  let minDist = Infinity
+  let maxDist = -Infinity
+  pePosition = null
+  apPosition = null
+
+  for (let i = 1; i < points.length; i += 1) {
+    if (soiBodyIds[i] !== startSoi) break
+    const dx = points[i].x - dominantBody.position.x
+    const dy = points[i].y - dominantBody.position.y
+    const dist = Math.sqrt(dx * dx + dy * dy)
+    if (dist < minDist) {
+      minDist = dist
+      pePosition = points[i]
+    }
+    if (isBoundOrbit && dist > maxDist) {
+      maxDist = dist
+      apPosition = points[i]
+    }
+  }
+}
+
 function refreshPrediction(force = false): void {
   predictionTimer += force ? 999 : 0
   if (!predictionNeedsRefresh && predictionTimer < 0.25) {
     return
   }
   predictionPoints = computePrediction(simulation, predictionToggle.checked)
+  const metrics = computeOrbitalMetrics(simulation)
+  findOrbitMarkers(predictionPoints, metrics.energy < 0)
   predictionNeedsRefresh = false
   predictionTimer = 0
 }
@@ -369,6 +429,9 @@ function renderFrame(): void {
     prediction: predictionPoints,
     burnVector: predictionToggle.checked ? getPlannedBurnVector(simulation) : { x: 0, y: 0 },
     highlightId: focusId,
+    soiRadii,
+    pePosition,
+    apPosition,
   })
 }
 

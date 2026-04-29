@@ -74,6 +74,12 @@ export interface OrbitalMetrics {
   periapsis: number | null
   apoapsis: number | null
   orbitClass: string
+  period: number | null
+}
+
+export interface PredictionResult {
+  points: Vec[]
+  soiBodyIds: BodyId[]
 }
 
 const GRAVITY_SOFTENING = 6
@@ -468,6 +474,26 @@ export function stepSimulation(state: SimulationState, deltaSeconds: number): vo
   }
 }
 
+export function computeSoiRadii(bodies: Body[]): Map<BodyId, number> {
+  const star = bodies.find((b) => b.id === 'star')!
+  const planet = bodies.find((b) => b.id === 'planet')!
+  const moon = bodies.find((b) => b.id === 'moon')!
+  const planetOrbitRadius = length(sub(planet.position, star.position))
+  const moonOrbitRadius = length(sub(moon.position, planet.position))
+  const result = new Map<BodyId, number>()
+  result.set('planet', planetOrbitRadius * Math.pow(planet.mass / (3 * star.mass), 1 / 3))
+  result.set('moon', moonOrbitRadius * Math.pow(moon.mass / (3 * planet.mass), 1 / 3))
+  return result
+}
+
+export function getSoiBodyAtPosition(position: Vec, bodies: Body[], soiRadii: Map<BodyId, number>): BodyId {
+  const moon = bodies.find((b) => b.id === 'moon')!
+  const planet = bodies.find((b) => b.id === 'planet')!
+  if (length(sub(position, moon.position)) < (soiRadii.get('moon') ?? 0)) return 'moon'
+  if (length(sub(position, planet.position)) < (soiRadii.get('planet') ?? 0)) return 'planet'
+  return 'star'
+}
+
 export function getDominantBody(state: SimulationState): Body {
   let dominant = state.bodies[0]
   let strongestPull = -Infinity
@@ -514,10 +540,12 @@ export function computeOrbitalMetrics(state: SimulationState): OrbitalMetrics {
 
   let periapsis: number | null = null
   let apoapsis: number | null = null
+  let period: number | null = null
   if (energy < 0) {
     const semiMajorAxis = -mu / (2 * energy)
     periapsis = semiMajorAxis * (1 - eccentricity)
     apoapsis = eccentricity < 1 ? semiMajorAxis * (1 + eccentricity) : null
+    period = 2 * Math.PI * Math.sqrt((semiMajorAxis * semiMajorAxis * semiMajorAxis) / mu)
   } else if (Math.abs(angularMomentum) > 1e-6) {
     periapsis = (angularMomentum * angularMomentum) / (mu * (1 + eccentricity))
   }
@@ -534,6 +562,7 @@ export function computeOrbitalMetrics(state: SimulationState): OrbitalMetrics {
     periapsis,
     apoapsis,
     orbitClass: computeOrbitalClass(eccentricity, energy),
+    period,
   }
 }
 
@@ -562,7 +591,8 @@ export function executeBurn(state: SimulationState): void {
   state.burnsExecuted += 1
 }
 
-export function computePrediction(state: SimulationState, includePlannedBurn: boolean): Vec[] {
+export function computePrediction(state: SimulationState, includePlannedBurn: boolean): PredictionResult {
+  const soiRadii = computeSoiRadii(state.bodies)
   const bodies = state.bodies.map(cloneBody)
   const probe = cloneProbe(state.probe)
 
@@ -571,17 +601,21 @@ export function computePrediction(state: SimulationState, includePlannedBurn: bo
   }
 
   const points: Vec[] = [cloneVec(probe.position)]
+  const soiBodyIds: BodyId[] = [getSoiBodyAtPosition(probe.position, state.bodies, soiRadii)]
+
   for (let stepIndex = 0; stepIndex < PREDICTION_STEPS; stepIndex += 1) {
     integrateWorld(bodies, probe, PREDICTION_DT)
     if (stepIndex % PREDICTION_SAMPLE_STRIDE === 0) {
-      points.push(cloneVec(probe.position))
+      const pos = cloneVec(probe.position)
+      points.push(pos)
+      soiBodyIds.push(getSoiBodyAtPosition(pos, state.bodies, soiRadii))
     }
     if (detectProbeImpact(probe, bodies) || length(probe.position) > 2400) {
       break
     }
   }
 
-  return points
+  return { points, soiBodyIds }
 }
 
 export function getEntityPosition(state: SimulationState, focusId: FocusId): Vec {
