@@ -19,12 +19,6 @@ import {
 } from './sim.ts'
 import { createStarfield, renderScene, type CameraState } from './render.ts'
 
-declare global {
-  interface Window {
-    render_game_to_text: () => string
-    advanceTime: (ms: number) => void
-  }
-}
 
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) {
@@ -332,46 +326,6 @@ function syncUi(): void {
   }
 }
 
-function buildTextState(): string {
-  const metrics = computeOrbitalMetrics(simulation)
-  return JSON.stringify({
-    coordinateSystem: 'origin at star center, +x right, +y up',
-    mode: running ? 'running' : 'paused',
-    preset: getPresetById(simulation.presetId).name,
-    simTime: round(simulation.time, 2),
-    burnsExecuted: simulation.burnsExecuted,
-    timeScale: getCurrentTimeScale(),
-    focus: focusId,
-    burnPlan: {
-      magnitude: round(simulation.burnPlan.magnitude, 2),
-      angleDeg: round(simulation.burnPlan.angleDeg, 0),
-    },
-    probe: {
-      x: round(simulation.probe.position.x, 2),
-      y: round(simulation.probe.position.y, 2),
-      vx: round(simulation.probe.velocity.x, 2),
-      vy: round(simulation.probe.velocity.y, 2),
-      impactBodyId: simulation.probe.impactBodyId,
-    },
-    telemetry: {
-      dominantBody: metrics.dominantBodyName,
-      altitude: round(metrics.altitude, 2),
-      speed: round(metrics.speed, 2),
-      relativeSpeed: round(metrics.relativeSpeed, 2),
-      periapsis: metrics.periapsis === null ? null : round(metrics.periapsis, 2),
-      apoapsis: metrics.apoapsis === null ? null : round(metrics.apoapsis, 2),
-      eccentricity: round(metrics.eccentricity, 3),
-      orbitClass: metrics.orbitClass,
-    },
-    bodies: simulation.bodies.map((body) => ({
-      id: body.id,
-      x: round(body.position.x, 2),
-      y: round(body.position.y, 2),
-      vx: round(body.velocity.x, 2),
-      vy: round(body.velocity.y, 2),
-    })),
-  })
-}
 
 function refreshPrediction(force = false): void {
   predictionTimer += force ? 999 : 0
@@ -523,15 +477,6 @@ document.addEventListener('keydown', (event) => {
     toggleFullscreen()
   }
 })
-
-window.render_game_to_text = buildTextState
-window.advanceTime = (ms: number) => {
-  stepSimulation(simulation, (ms / 1000) * getCurrentTimeScale())
-  predictionNeedsRefresh = true
-  refreshPrediction(true)
-  syncUi()
-  renderFrame()
-}
 
 let lastFrame = performance.now()
 function animate(timestamp: number): void {
